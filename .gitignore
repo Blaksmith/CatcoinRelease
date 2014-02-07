@@ -2,6 +2,8 @@ src/*.exe
 src/catcoin
 src/catcoind
 src/test_catcoin
+src/makefile.local
+src/*.sh
 .*.swp
 *.*~*
 *.bak
