@@ -1129,9 +1129,10 @@ unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBl
     const CBlockIndex* pindexFirst = pindexLast;
 
 	 int64 error;    
-    double pGain=0.00125;	// Theses values can be changed to tune the PID formula
-    double iGain=0.00025;	// Theses values can be changed to tune the PID formula
-    double dGain=0.0725; 	// Theses values can be changed to tune the PID formula
+	 int64 diffcalc;
+    double pGain=-0.05125;	// Theses values can be changed to tune the PID formula
+    double iGain=-0.0525;	// Theses values can be changed to tune the PID formula
+    double dGain=-0.0075; 	// Theses values can be changed to tune the PID formula
     double pCalc;
     double iCalc;
     double dCalc;
@@ -1255,29 +1256,58 @@ If New diff < 0, then set static value of 0.0001 or so.
 	 if(pindexLast->nHeight >= fork3Block || fTestNet) // Fork 3 to use a PID routine instead of the other 2 forks 
 	 {
 	 	pindexFirst = pindexLast->pprev; 															// Set previous block
-	 	for(i=0;i<4;i++) pindexFirst = pindexFirst->pprev; 									// Set 4th previous block for 4 block filtering 
+	 	for(i=0;i<3;i++) pindexFirst = pindexFirst->pprev; 									// Set 4th previous block for 4 block filtering 
 	 	
 	 	nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime(); 	// Get last 2 blocks time
 	 	nActualTimespan = nActualTimespan / 4; 													// Calculate average for last 4 blocks
 	 	bnNew.SetCompact(pindexLast->nBits);														// Get current difficulty
 
-	 	error = nTargetSpacing - nActualTimespan;																			// Calculate the error to be fed into the PID Calculation
+	 	error = nActualTimespan - nTargetSpacing;																			// Calculate the error to be fed into the PID Calculation
 	 	pCalc = pGain * (double)error;																						// Calculate P ... pGain defined at beginning of routine
 	 	iCalc = iGain * (double)error * (double)((double)nTargetSpacing / (double)nActualTimespan);		// Calculate I ... iGain defined at beginning of routine
 	 	dCalc = dGain * ((double)error / (double)nActualTimespan) * iCalc;										// Calculate D ... dGain defined at beginning of routine
 	 	
 	 	dResult = pCalc + iCalc + dCalc;																						// Sum the PID calculations
-	 	dResult = dResult * 8192; 																								// Adjust for the scrypt multiplier
-		result = (int64)(dResult);																								// Turn back into an integer
-
+	 	result = (int64)(dResult * 4);
+	 	if(dResult > 0 && (dResult * 4) - (double)result > 0.5) result ++;	
+	 	if(dResult < 0 && (dResult * 4) - (double)result > 0.5) result --;	
+//	 	if(result > 0x7FFF) result = 0x7FFF;																							// Adjust for the scrypt multiplier 
+		//result = 0x1d000000 * result;																							// Turn back into an integer
+		if(dResult >= -0.01 && dResult <= 0.01)
+		{
+			if(fTestNet) printf("Result: %f.  No change\n", dResult);
+			return bnNew.GetCompact();
+		}
+		//result = -result;
+		//bResult.SetCompact(0x1d0fffff);
+		diffcalc = 0;
+		i=0;
+		while(result > 0x00FFFFFF) 
+		{
+			diffcalc += 0x01000000;
+			result -= 0x00FFFFFF;
+			i++;
+		}
+		bResult.SetCompact(0x1e000000 + result);
+		//bResult = bResult >> i;
+		//bResult *= 2;
+		//bResult *= 65536;
 	 	if(fTestNet) printf("pCalc: %f, iCalc: %f, dCalc: %f, Result: %"PRI64d" (%f)\n", pCalc, iCalc, dCalc, result, dResult); // Only print if testnet to reduce log lag
 		if(fTestNet) printf("Result: %08x %s\n",bResult.GetCompact(), bResult.getuint256().ToString().c_str()); 						// Only print if testnet to reduce log lag
 	 	if(fTestNet) printf("Actual Time: %"PRI64d", error: %"PRI64d"\n", nActualTimespan, error); 										// Only print if testnet to reduce log lag
 	 	if(fTestNet) printf("Before: %08x %s\n",bnNew.GetCompact(), bnNew.getuint256().ToString().c_str()); 							// Only print if testnet to reduce log lag
 
-		bnNew.SetCompact(bnNew.GetCompact() - result); 	// Subtract the result to set the current diff
-		bLowLimit.SetCompact(0x1e0fffff); 					// Low limit to make sure the calculation never goes negative (Diff 15 according to cgminer, but diff 0.000228885 in getinfo)
+		//bnNew.SetCompact(bnNew.GetCompact() - result); 	// Subtract the result to set the current diff
+		if(result !=0) bnNew = bnNew - (bResult * 64); 	// Subtract the result to set the current diff
+		//if(result != 0) bnNew.SetCompact(bnNew.GetCompact() / result); 	// Subtract the result to set the current diff
+		//bnNew.SetCompact(bnNew.GetCompact() - diffcalc);
+		bLowLimit.SetCompact(0x1e0fffff); 					// Low limit to make sure the calculation never goes negative (Diff 15 according to cgminer, but diff 0.000228885 in getinfo)		
+		//bnNew.SetCompact(bnNew.GetCompact() - result); 	// Subtract the result to set the current diff 
 		if (bnNew > bLowLimit) bnNew = bLowLimit; 		// Actually set to the lowest diff, if the calculated diff is too low
+		
+    if (bnNew > bnProofOfWorkLimit)
+        bnNew = bnProofOfWorkLimit;
+		
 		
 	 	if(fTestNet) printf("After:  %08x %s\n",bnNew.GetCompact(), bnNew.getuint256().ToString().c_str()); 							// Only print if testnet to reduce log lag
 	 } // End Fork 3 to use a PID routine instead of the other 2 forks routine
