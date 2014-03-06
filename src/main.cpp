@@ -1083,9 +1083,10 @@ static const int64 nIntervalOld = nTargetTimespanOld / nTargetSpacing;
 // minimum amount of work that could possibly be required nTime after
 // minimum work required was nBase
 //
-unsigned int ComputeMinWork(unsigned int nBase, int64 nTime, int height)
+unsigned int ComputeMinWork(unsigned int nBase, int64 nTime)
 {
-	printf("********************** CommputeMinWork() %d\n", bnProofOfWorkLimit.GetCompact());
+//#warning "possibly buggy code here until we determine root cause of february forkfest"
+
     // Testnet has min-difficulty blocks
     // after nTargetSpacing*2 time between blocks:
     if (fTestNet && nTime > nTargetSpacing*2)
@@ -1095,13 +1096,10 @@ unsigned int ComputeMinWork(unsigned int nBase, int64 nTime, int height)
     bnResult.SetCompact(nBase);
     while (nTime > 0 && bnResult < bnProofOfWorkLimit)
     {
-        // Maximum 400% adjustment...
-        bnResult *= 4;
-        // ... in best-case exactly 4-times-normal target time
-        if(height < 20290)
-            nTime -= nTargetTimespanOld*4;
-        else
-            nTime -= nTargetTimespan*4;
+	// should technically be 112/100 * 36 .. ~40
+        bnResult *= 40;
+        // and if we have long blocks, max 40 x, as well
+        nTime -= nTargetTimespan*40;
     }
     if (bnResult > bnProofOfWorkLimit)
         bnResult = bnProofOfWorkLimit;
@@ -1130,9 +1128,14 @@ unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBl
 
 	 int64 error;    
 	 //int64 diffcalc;
-    double pGain=-0.05125;	// Theses values can be changed to tune the PID formula
-    double iGain=-0.0525;	// Theses values can be changed to tune the PID formula
-    double dGain=-0.0075; 	// Theses values can be changed to tune the PID formula
+    double pGainUp=-0.005125;	// Theses values can be changed to tune the PID formula
+    double iGainUp=-0.0225;	// Theses values can be changed to tune the PID formula
+    double dGainUp=-0.0075; 	// Theses values can be changed to tune the PID formula
+
+    double pGainDn=-0.005125;	// Theses values can be changed to tune the PID formula
+    double iGainDn=-0.0525;	// Theses values can be changed to tune the PID formula
+    double dGainDn=-0.0075; 	// Theses values can be changed to tune the PID formula
+
     double pCalc;
     double iCalc;
     double dCalc;
@@ -1244,9 +1247,9 @@ unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBl
 /*
 PID formula
 Error = Actual Time - Desired time
-P Calc = 0.00125 * Error
-I Calc = 0.00025 * Error * (Desired Time / Actual Time) 
-D Calc = 0.0725 * (Error / Actual Time) + I Calc
+P Calc = -0.005125 * Error
+I Calc = -0.0225 * Error * (Desired Time / Actual Time) 
+D Calc = -0.0075 * (Error / Actual Time) * I Calc
 
 New Diff = (Current Diff + P Calc + I Calc + D Calc)
 
@@ -1256,10 +1259,10 @@ If New diff < 0, then set static value of 0.0001 or so.
 	 if(pindexLast->nHeight >= fork3Block || fTestNet) // Fork 3 to use a PID routine instead of the other 2 forks 
 	 {
 	 	pindexFirst = pindexLast->pprev; 															// Set previous block
-	 	for(i=0;i<3;i++) pindexFirst = pindexFirst->pprev; 									// Set 4th previous block for 4 block filtering 
+	 	for(i=0;i<7;i++) pindexFirst = pindexFirst->pprev; 									// Set 4th previous block for 8 block filtering 
 	 	
-	 	nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime(); 	// Get last 2 blocks time
-	 	nActualTimespan = nActualTimespan / 4; 													// Calculate average for last 4 blocks
+	 	nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime(); 	// Get last X blocks time
+	 	nActualTimespan = nActualTimespan / 8; 													// Calculate average for last 8 blocks
 	 	bnNew.SetCompact(pindexLast->nBits);														// Get current difficulty
 	 	
 	 	i=0;												// Zero bit-shift counter
@@ -1273,13 +1276,29 @@ If New diff < 0, then set static value of 0.0001 or so.
 	 	
 
 	 	error = nActualTimespan - nTargetSpacing;																			// Calculate the error to be fed into the PID Calculation
-	 	pCalc = pGain * (double)error;																						// Calculate P ... pGain defined at beginning of routine
-	 	iCalc = iGain * (double)error * (double)((double)nTargetSpacing / (double)nActualTimespan);		// Calculate I ... iGain defined at beginning of routine
-	 	dCalc = dGain * ((double)error / (double)nActualTimespan) * iCalc;										// Calculate D ... dGain defined at beginning of routine
+	 	if(error >= -450 && error <= 450) // Slower gains for when the average time is within 5 min 
+	 	{
+	 		pCalc = pGainUp * (double)error;																						// Calculate P ... pGain defined at beginning of routine
+	 		iCalc = iGainUp * (double)error * (double)((double)nTargetSpacing / (double)nActualTimespan);	// Calculate I ... iGain defined at beginning of routine
+	 		dCalc = dGainUp * ((double)error / (double)nActualTimespan) * iCalc;										// Calculate D ... dGain defined at beginning of routine
+	 	}
+	 	else // Faster gains for block averages > 5 minutes 
+	 	{
+	 		pCalc = pGainDn * (double)error;																						// Calculate P ... pGain defined at beginning of routine
+	 		iCalc = iGainDn * (double)error * (double)((double)nTargetSpacing / (double)nActualTimespan);	// Calculate I ... iGain defined at beginning of routine
+	 		dCalc = dGainDn * ((double)error / (double)nActualTimespan) * iCalc;										// Calculate D ... dGain defined at beginning of routine
+	 	}
+
+		if(error > -10 && error < 10)
+		{
+			if(fTestNet) printf("Within dead zone. No change!  error: %"PRI64d"\n", error);
+			return(bnNew.GetCompact());
+		}	 	
 	 	
 	 	dResult = pCalc + iCalc + dCalc;																						// Sum the PID calculations
 	 	
 	 	result = (int64)(dResult * 65536);			// Adjust for scrypt calcuation
+	 	while(result >  8388607) result = result / 2; // Bring the result within max range for overflow condition 
 	 	bResult = result;									// Set the bignum value
 	 	if(i>24) bResult = bResult << (i - 24);	// bit-shift integer value of result to be subtracted from current diff
 
@@ -1288,10 +1307,18 @@ If New diff < 0, then set static value of 0.0001 or so.
 		if(fTestNet) printf("Result: %08x %s\n",bResult.GetCompact(), bResult.getuint256().ToString().c_str()); 						// Only print if testnet to reduce log lag
 	 	if(fTestNet) printf("Before: %08x %s\n",bnNew.GetCompact(), bnNew.getuint256().ToString().c_str()); 							// Only print if testnet to reduce log lag
 
-		bnNew = bnNew - bResult; 			// Subtract the result to set the current diff
-		
-	   if (bnNew > bnProofOfWorkLimit) bnNew = bnProofOfWorkLimit; // Make sure that diff is not set too low, ever
+		//if(((bnNew.GetCompact() - bResult.GetCompact()) & 0x00800000) == 0x00800000) bResult *= 2; 
 
+		bnNew = bnNew - bResult; 			// Subtract the result to set the current diff
+
+		// ONLY FOR RESET!
+		//if(error > 1000) bnNew.SetCompact(0x1e0fffff);
+		
+	   if (bnNew.GetCompact() > 0x1e0fffff) bnNew.SetCompact(0x1e0fffff); // Make sure that diff is not set too low, ever
+	   //if (bnNew > bnProofOfWorkLimit) bnNew = bnProofOfWorkLimit; // Make sure that diff is not set too low, ever
+		
+				
+		
 	 	if(fTestNet) printf("After:  %08x %s\n",bnNew.GetCompact(), bnNew.getuint256().ToString().c_str()); 							// Only print if testnet to reduce log lag
 	 	
 	 } // End Fork 3 to use a PID routine instead of the other 2 forks routine
@@ -2405,7 +2432,7 @@ bool ProcessBlock(CValidationState &state, CNode* pfrom, CBlock* pblock, CDiskBl
         CBigNum bnNewBlock;
         bnNewBlock.SetCompact(pblock->nBits);
         CBigNum bnRequired;
-        bnRequired.SetCompact(ComputeMinWork(pcheckpoint->nBits, deltaTime, pcheckpoint->nHeight));
+        bnRequired.SetCompact(ComputeMinWork(pcheckpoint->nBits, deltaTime)); // , pcheckpoint->nHeight));
 
         if (bnNewBlock > bnRequired)
         {
