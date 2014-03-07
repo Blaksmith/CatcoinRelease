@@ -2432,11 +2432,16 @@ bool ProcessBlock(CValidationState &state, CNode* pfrom, CBlock* pblock, CDiskBl
         CBigNum bnNewBlock;
         bnNewBlock.SetCompact(pblock->nBits);
         CBigNum bnRequired;
-        bnRequired.SetCompact(ComputeMinWork(pcheckpoint->nBits, deltaTime)); // , pcheckpoint->nHeight));
+        bnRequired.SetCompact(ComputeMinWork(pcheckpoint->nBits, deltaTime));
 
         if (bnNewBlock > bnRequired)
         {
-            return state.DoS(100, error("ProcessBlock() : block with too little proof-of-work"));
+            printf("WARN: low proof of work: bnNewBlock: %08x bnRequired: %08x\n",
+				pblock->nBits, bnRequired.GetCompact());
+            //return state.DoS(100, error("ProcessBlock() : block with too little proof-of-work"));
+            // Don't throw them under the bus yet, at least until we get more nodes upgraded
+            // from Forktackular February -- Troy
+            return state.DoS(25, error("ProcessBlock() : block with too little proof-of-work"));
         }
     }
 
