@@ -1114,7 +1114,7 @@ unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBl
     int64 nIntervalLocal = 0;
     int forkBlock = 20290 - 1;
     int fork2Block = 21346;
-    int fork3Block = 99999; // Need to pick one if this code is to go live
+    int fork3Block = 27260; // Need to pick one if this code is to go live
 
 	 // moved variable inits to the top where they belong
 	 
