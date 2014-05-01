@@ -1089,8 +1089,8 @@ unsigned int ComputeMinWork(unsigned int nBase, int64 nTime)
 
     // Testnet has min-difficulty blocks
     // after nTargetSpacing*2 time between blocks:
-    if (fTestNet && nTime > nTargetSpacing*2)
-        return bnProofOfWorkLimit.GetCompact();
+    //if (fTestNet && nTime > nTargetSpacing*2)
+    //    return bnProofOfWorkLimit.GetCompact();
 
     CBigNum bnResult;
     bnResult.SetCompact(nBase);
@@ -1115,11 +1115,13 @@ unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBl
     int forkBlock = 20290 - 1;
     int fork2Block = 21346;
     int fork3Block = 27260; // Need to pick one if this code is to go live
+    int maintBlock = 999999; // Need to pick a block for maint release
 
 	 // moved variable inits to the top where they belong
 	 
     unsigned int nProofOfWorkLimit = bnProofOfWorkLimit.GetCompact();
     int64 nActualTimespan;
+    int64 nTempTimespan;
     int64 lowLimit; 
     int64 highLimit;
     int blockstogoback = nIntervalLocal-1;
@@ -1259,11 +1261,28 @@ If New diff < 0, then set static value of 0.0001 or so.
 	 if(pindexLast->nHeight >= fork3Block || fTestNet) // Fork 3 to use a PID routine instead of the other 2 forks 
 	 {
 	 	pindexFirst = pindexLast->pprev; 															// Set previous block
-	 	for(i=0;i<7;i++) pindexFirst = pindexFirst->pprev; 									// Set 4th previous block for 8 block filtering 
+ 		for(i=0;i<7;i++) pindexFirst = pindexFirst->pprev; 									// Set 8th previous block for 8 block filtering 
 	 	
-	 	nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime(); 	// Get last X blocks time
-	 	nActualTimespan = nActualTimespan / 8; 													// Calculate average for last 8 blocks
-	 	bnNew.SetCompact(pindexLast->nBits);														// Get current difficulty
+ 		nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime(); 	// Get last X blocks time
+ 		nActualTimespan = nActualTimespan / 8; 													// Calculate average for last 8 blocks
+ 		bnNew.SetCompact(pindexLast->nBits);														// Get current difficulty
+
+	 	if(pindexLast->nHeight >= maintBlock || fTestNet) // Maint release for override of block time average
+	 	{
+	 		bnNew.SetCompact(pindexLast->nBits);														// Get current difficulty
+	 		pindexFirst = pindexLast->pprev; 															// Set previous block
+	 		nTempTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime();		// Get last block time
+	 		if(nTempTimespan > 420 && nTempTimespan < 780)	// If last block was between 7 and 13 minutes, do not change diff.
+	 		{
+				if(fTestNet) printf("Last block within target zone. No change!  Time: %"PRI64d"\n", nTempTimespan);
+				return(bnNew.GetCompact());
+	 		}
+	 		if(nTempTimespan > 3600)	// Last block > 1 hour
+	 		{
+	 			if(fTestNet) printf("Last block greater than 1 hour.  Ignoring last 8 block averaging to bring back in range faster.\n");
+	 			nActualTimespan = nTempTimespan;	// We need to adjust down fast NOW.  Ignore the 8 block averaging, and use the time of the last block 
+	 		}
+	 	}
 	 	
 	 	i=0;												// Zero bit-shift counter
 	 	while(bnNew>0)									// Loop while bnNew > 0
@@ -1276,6 +1295,8 @@ If New diff < 0, then set static value of 0.0001 or so.
 	 	
 
 	 	error = nActualTimespan - nTargetSpacing;																			// Calculate the error to be fed into the PID Calculation
+	 	if(nActualTimespan <= 0) nActualTimespan = 1; // Make sure we don't ever divide by zero in the I and D calcs
+
 	 	if(error >= -450 && error <= 450) // Slower gains for when the average time is within 2.5 min and 7.5 min 
 	 	{
 	 		pCalc = pGainUp * (double)error;																						// Calculate P ... pGainUp defined at beginning of routine
@@ -1314,6 +1335,9 @@ If New diff < 0, then set static value of 0.0001 or so.
 	 	if(fTestNet) printf("After:  %08x %s\n",bnNew.GetCompact(), bnNew.getuint256().ToString().c_str()); 							// Only print if testnet to reduce log lag
 	 	
 	 } // End Fork 3 to use a PID routine instead of the other 2 forks routine
+
+	 // Reset diff for testing	 
+	 //bnNew.SetCompact(0x1e0fffff);
 	 
     return bnNew.GetCompact();
 }
@@ -1442,8 +1466,8 @@ void CBlockHeader::UpdateTime(const CBlockIndex* pindexPrev)
     nTime = max(pindexPrev->GetMedianTimePast()+1, GetAdjustedTime());
 
     // Updating time can change work required on testnet:
-    if (fTestNet)
-        nBits = GetNextWorkRequired(pindexPrev, this);
+//    if (fTestNet)
+//        nBits = GetNextWorkRequired(pindexPrev, this);
 }
 
 
@@ -2295,6 +2319,7 @@ bool CBlock::CheckBlock(CValidationState &state, bool fCheckPOW, bool fCheckMerk
 bool CBlock::AcceptBlock(CValidationState &state, CDiskBlockPos *dbp)
 {
     // Check for duplicate
+    int nMinSpacing = 30;
     uint256 hash = GetHash();
     if (mapBlockIndex.count(hash))
         return state.Invalid(error("AcceptBlock() : block already in mapBlockIndex"));
@@ -2314,7 +2339,9 @@ bool CBlock::AcceptBlock(CValidationState &state, CDiskBlockPos *dbp)
             return state.DoS(100, error("AcceptBlock(height=%d) : incorrect proof of work", nHeight));
 
         // Check timestamp against prev
-        if (GetBlockTime() <= pindexPrev->GetMedianTimePast())
+        if(fTestNet) printf("Block Time: %"PRI64d"\n", GetBlockTime());
+        if(fTestNet) printf("Time now: %"PRI64d" ... Difference: %"PRI64d"\n", GetTime(), GetTime() - GetBlockTime());
+        if (GetBlockTime() <= pindexPrev->GetMedianTimePast() || (GetTime() - GetBlockTime()) < nMinSpacing )
             return state.Invalid(error("AcceptBlock() : block's timestamp is too early"));
 
         // Check that all transactions are finalized
