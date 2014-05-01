@@ -1276,6 +1276,7 @@ If New diff < 0, then set static value of 0.0001 or so.
 	 	
 
 	 	error = nActualTimespan - nTargetSpacing;																			// Calculate the error to be fed into the PID Calculation
+	 	if(nActualTimespan <= 0) nActualTimespan = 1;
 	 	if(error >= -450 && error <= 450) // Slower gains for when the average time is within 2.5 min and 7.5 min 
 	 	{
 	 		pCalc = pGainUp * (double)error;																						// Calculate P ... pGainUp defined at beginning of routine
