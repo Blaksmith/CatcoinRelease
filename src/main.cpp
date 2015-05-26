@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2012 The Bitcoin developers
-// Copyright (c) 2013-2014 The Catcoin developers
+// Copyright (c) 2013-2015 The Catcoin developers
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -1073,8 +1073,7 @@ int64 static GetBlockValue(int nHeight, int64 nFees)
 }
 
 static const int64 nTargetTimespan = 6 * 60 * 60; // 6 hours
-static const int64 nTargetSpacing = 10 * 60;
-//static const int64 nMinSpacing = 30; 	// Absolute minimum spacing
+static const int64 nTargetSpacing = 10 * 60;  // 10 minute block time target
 static const int64 nInterval = nTargetTimespan / nTargetSpacing;
 
 static const int64 nTargetTimespanOld = 14 * 24 * 60 * 60; // two weeks
@@ -1084,23 +1083,25 @@ static const int64 nIntervalOld = nTargetTimespanOld / nTargetSpacing;
 // minimum amount of work that could possibly be required nTime after
 // minimum work required was nBase
 //
-unsigned int ComputeMinWork(unsigned int nBase, int64 nTime)
+unsigned int ComputeMinWork(unsigned int nBase, int64 nTime, int height)
 {
-//#warning "possibly buggy code here until we determine root cause of february forkfest"
 
     // Testnet has min-difficulty blocks
     // after nTargetSpacing*2 time between blocks:
-    if (fTestNet && nTime > nTargetSpacing*2)
-        return bnProofOfWorkLimit.GetCompact();
+    //if (fTestNet && nTime > nTargetSpacing*2)
+    //    return bnProofOfWorkLimit.GetCompact();
 
     CBigNum bnResult;
     bnResult.SetCompact(nBase);
     while (nTime > 0 && bnResult < bnProofOfWorkLimit)
     {
-	// should technically be 112/100 * 36 .. ~40
-        bnResult *= 40;
-        // and if we have long blocks, max 40 x, as well
-        nTime -= nTargetTimespan*40;
+	 // Maximum 400% adjustment...
+         bnResult *= 4;
+         // ... in best-case exactly 4-times-normal target time 
+         if(height < 20290)
+             nTime -= nTargetTimespanOld*4;
+         else
+             nTime -= nTargetTimespan*4;
     }
     if (bnResult > bnProofOfWorkLimit)
         bnResult = bnProofOfWorkLimit;
@@ -1108,9 +1109,11 @@ unsigned int ComputeMinWork(unsigned int nBase, int64 nTime)
 }
 
 static int fork3Block = 27260; // FIXME move to top...
-//static int fork4Block = 27680; // Acceptblock needs this
+//static int fork4Block = 27680; // Acceptblock needs this ********** Acceptblock does NOT require this any more *************  
+static int fork4Block = 999999; // Acceptblock needs this  
+//static int fork5Block = 999999; // Activate Digishield
 
-unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock)
+unsigned int static GetNextWorkRequired_PID(const CBlockIndex* pindexLast, const CBlockHeader *pblock)
 {
     unsigned int i;
 
@@ -1118,30 +1121,18 @@ unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBl
     int64 nIntervalLocal = 0;
     int forkBlock = 20290 - 1;
     int fork2Block = 21346;
-    int fork5Block = 999999; // Change for when to go live
-
-    int blocks = 0;		// Fed into PID
-    int blocks60 = 0; 	// 1 hour
-    int blocks120 = 0; 	// 2 hours
-    int blocks240 = 0;	// 4 hours
-    int blocks360 = 0;	// 6 hours
-    int blocks720 = 0;	// 12 hours
-    int blocks1440 = 0;	// 24 hours
-//    int64_t count = 0;
-//    int64_t actual = 0;
 	
+
 	 // moved variable inits to the top where they belong
 	 
     unsigned int nProofOfWorkLimit = bnProofOfWorkLimit.GetCompact();
     int64 nActualTimespan;
     int64 lowLimit; 
     int64 highLimit;
-    int64 blockstogoback = nIntervalLocal-1;
+    int blockstogoback = nIntervalLocal-1;
     CBigNum bnNew;
     const CBlockIndex* pindexFirst = pindexLast;
-//    const CBlockIndex* pindex = pindexLast;
-//	 int64_t LastTime = pindex->GetBlockTime();
-//	 int64_t FirstTime = LastTime;
+
 	 int64 error;    
 	 //int64 diffcalc;
     double pGainUp=-0.005125;	// Theses values can be changed to tune the PID formula
@@ -1151,14 +1142,6 @@ unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBl
     double pGainDn=-0.005125;	// Theses values can be changed to tune the PID formula
     double iGainDn=-0.0525;	// Theses values can be changed to tune the PID formula
     double dGainDn=-0.0075; 	// Theses values can be changed to tune the PID formula
-
-    double pGainBf=-0.05125;	// Theses values can be changed to tune the PID formula
-    double iGainBf=-0.525;	// Theses values can be changed to tune the PID formula
-    double dGainBf=-0.075; 	// Theses values can be changed to tune the PID formula
-
-    double pGainBs=-0.005125;	// Theses values can be changed to tune the PID formula
-    double iGainBs=-0.0525;	// Theses values can be changed to tune the PID formula
-    double dGainBs=-0.0075; 	// Theses values can be changed to tune the PID formula
 
     double pCalc;
     double iCalc;
@@ -1272,7 +1255,7 @@ unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBl
 PID formula
 Error = Actual Time - Desired time
 P Calc = pGain * Error
-I Calc = iGain * Error * (Desired Blocks per Timeframe  / Actual Blocks per Timeframe) 
+I Calc = iGain * Error * (Desired Time / Actual Time) 
 D Calc = dGain * (Error / Actual Time) * I Calc
 
 New Diff = (Current Diff + P Calc + I Calc + D Calc)
@@ -1284,58 +1267,16 @@ If New diff < 0, then set static value of 0.0001 or so.
 	// Fork 3 to use a PID routine instead of the other 2 forks 
 	{
 		pindexFirst = pindexLast->pprev; 	// Set previous block
-		if(pindexLast->nHeight >= fork5Block || fTestNet)
-		{
-			blocks = 0; 
-    		blocks60 = 1; 	// 1 hour
-    		blocks120 = 1; 	// 2 hours
-    		blocks240 = 1;	// 4 hours
-    		blocks360 = 1;	// 6 hours
-    		blocks720 = 1;	// 12 hours
-    		blocks1440 = 1;	// 24 hours
-			while( (nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime()) < 86400) // 24 hours for now
-			{
-				pindexFirst = pindexFirst->pprev;
-				blocks++;
-				if((nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime()) < 3600) blocks60++; // 1 hour blocks
-				if((nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime()) < 7200) blocks120++; // 2 hour blocks
-				if((nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime()) < 14400) blocks240++; // 4 hour blocks
-				if((nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime()) < 21600) blocks360++; // 6 hour blocks
-				if((nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime()) < 43200) blocks720++; // 12 hour blocks
-				if((nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime()) < 86400) blocks1440++; // 24 hour blocks
-			}
-			//printf("64 block average routine");
-			//for(i=0;i<63;i++) pindexFirst = pindexFirst->pprev; // Set 4th previous block for 8 block filtering 
-		}
-		else
-		{
-			for(i=0;i<7;i++) pindexFirst = pindexFirst->pprev; // Set 4th previous block for 8 block filtering 
-		}
-		if(pindexLast->nHeight >= fork5Block || fTestNet)
-		{
-			printf("Blocks over the last 1, 2, 4, 6, 12 and 24 hours: %d, %d, %d, %d, %d, %d\n",blocks60, blocks120, blocks240, blocks360, blocks720, blocks1440);
-			blocks60*=24; 		// Adjust for feeding into the PID routine
-			blocks120*=12;		// Adjust for feeding into the PID routine
-			blocks240*=6; 		// Adjust for feeding into the PID routine
-			blocks360*=4;		// Adjust for feeding into the PID routine
-			blocks720*=2;		// Adjust for feeding into the PID routine
-			// no need to adjust blocks1440;
-			
-			// Pick the time period with the most blocks for adjustment into the PID routine
-			if(blocks60>blocks) blocks = blocks60;
-			if(blocks120>blocks) blocks = blocks120;
-			if(blocks240>blocks) blocks = blocks240;
-			if(blocks360>blocks) blocks = blocks360;
-			if(blocks720>blocks) blocks = blocks720;
-			if(blocks1440>blocks) blocks = blocks1440;
-		}
-		else
-		{
-			nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime(); 	// Get last X blocks time
-			nActualTimespan = nActualTimespan / 8; 	// Calculate average for last 8 blocks
-			printf("8 block average: %"PRI64d" ", nActualTimespan);
-		}
-
+		for(i=0;i<7;i++) pindexFirst = pindexFirst->pprev; // Set 4th previous block for 8 block filtering 
+		nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime(); 	// Get last X blocks time
+		nActualTimespan = nActualTimespan / 8; 	// Calculate average for last 8 blocks
+//		if(pindexLast->nHeight > fork4Block || fTestNet){
+//			if (nMinSpacing > nActualTimespan){
+//				printf("WARNING: SANITY CHECK FAILED: PID nActualTimespan %"PRI64d" too small! increased to %"PRI64d"\n",
+//					nActualTimespan, nMinSpacing );
+//				nActualTimespan = nMinSpacing;
+//			}
+//		}
 		bnNew.SetCompact(pindexLast->nBits);	// Get current difficulty
 		i=0;					// Zero bit-shift counter
 		while(bnNew>0)				// Loop while bnNew > 0
@@ -1346,71 +1287,33 @@ If New diff < 0, then set static value of 0.0001 or so.
 		}
 		bnNew.SetCompact(pindexLast->nBits);	// Get current difficulty again
 		
-		if(pindexLast->nHeight >= fork5Block || fTestNet)
+
+		error = nActualTimespan - nTargetSpacing;	// Calculate the error to be fed into the PID Calculation
+		if(error >= -450 && error <= 450) // Slower gains for when the average time is within 2.5 min and 7.5 min 
 		{
-			pindexFirst = pindexLast->pprev;
-			nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime(); 
-			if(nActualTimespan < (7.5 * 60) || nActualTimespan > (12.5 * 60) ) // Faster gains for when the average time is outside 12.5 min and 7.5 min 
-			{
-				if(nActualTimespan > (12.5 * 60) && blocks > 144)
-				{
-					error = blocks - 144; // force down if longer than X time for a block
-				}
-				else if(nActualTimespan < (15) && blocks < 144)
-				{
-					error = blocks - 144; // force down if longer than X time for a block
-				}
-				else
-				{
-					error = 144 - blocks; 
-				}
-//				error = 144 - blocks; 
-				// Calculate P ... pGainDn defined at beginning of routine
-				pCalc = pGainBf * (double)error;
-				// Calculate I ... iGainDn defined at beginning of routine
-				iCalc = iGainBf * (double)error * (double)((double)144 / (double)blocks);
-				// Calculate D ... dGainDn defined at beginning of routine
-				dCalc = dGainBf * ((double)error / (double)nActualTimespan) * iCalc;
-			}
-			else
-			{
-				error = 144 - blocks; 
-				// Calculate P ... pGainDn defined at beginning of routine
-				pCalc = pGainBs * (double)error;
-				// Calculate I ... iGainDn defined at beginning of routine
-				iCalc = iGainBs * (double)error * (double)((double)144 / (double)blocks);
-				// Calculate D ... dGainDn defined at beginning of routine
-				dCalc = dGainBs * ((double)error / (double)nActualTimespan) * iCalc;
-			}
+			// Calculate P ... pGainUp defined at beginning of routine
+			pCalc = pGainUp * (double)error;
+			// Calculate I ... iGainUp defined at beginning of routine
+			iCalc = iGainUp * (double)error * (double)((double)nTargetSpacing / (double)nActualTimespan);
+			// Calculate D ... dGainUp defined at beginning of routine
+			dCalc = dGainUp * ((double)error / (double)nActualTimespan) * iCalc;
 		}
-		else
+		else // Faster gains for block averages faster than 2.5 min and greater than 7.5 min 
 		{
-			error = nActualTimespan - nTargetSpacing;	// Calculate the error to be fed into the PID Calculation
-			if(error >= -450 && error <= 450) // Slower gains for when the average time is within 2.5 min and 7.5 min 
-			{
-				// Calculate P ... pGainUp defined at beginning of routine
-				pCalc = pGainUp * (double)error;
-				// Calculate I ... iGainUp defined at beginning of routine
-				iCalc = iGainUp * (double)error * (double)((double)nTargetSpacing / (double)nActualTimespan);
-				// Calculate D ... dGainUp defined at beginning of routine
-				dCalc = dGainUp * ((double)error / (double)nActualTimespan) * iCalc;
-			}
-			else // Faster gains for block averages faster than 2.5 min and greater than 7.5 min 
-			{
-				// Calculate P ... pGainDn defined at beginning of routine
-				pCalc = pGainDn * (double)error;
-				// Calculate I ... iGainDn defined at beginning of routine
-				iCalc = iGainDn * (double)error * (double)((double)nTargetSpacing / (double)nActualTimespan);
-				// Calculate D ... dGainDn defined at beginning of routine
-				dCalc = dGainDn * ((double)error / (double)nActualTimespan) * iCalc;
-			}
-	
-			if(error > -10 && error < 10)
-			{
-				if(fTestNet) printf("Within dead zone. No change!  error: %"PRI64d"\n", error);
-				return(bnNew.GetCompact());
-			}	 	
-	 	}
+			// Calculate P ... pGainDn defined at beginning of routine
+			pCalc = pGainDn * (double)error;
+			// Calculate I ... iGainDn defined at beginning of routine
+			iCalc = iGainDn * (double)error * (double)((double)nTargetSpacing / (double)nActualTimespan);
+			// Calculate D ... dGainDn defined at beginning of routine
+			dCalc = dGainDn * ((double)error / (double)nActualTimespan) * iCalc;
+		}
+
+		if(error > -10 && error < 10)
+		{
+			if(fTestNet) printf("Within dead zone. No change!  error: %"PRI64d"\n", error);
+			return(bnNew.GetCompact());
+		}	 	
+	 	
 	 	dResult = pCalc + iCalc + dCalc;	// Sum the PID calculations
 	 	
 		result = (int64)(dResult * 65536);	// Adjust for scrypt calcuation
@@ -1420,23 +1323,96 @@ If New diff < 0, then set static value of 0.0001 or so.
 		if(i>24) bResult = bResult << (i - 24);	// bit-shift integer value of result to be subtracted from current diff
 
 		if(fTestNet) printf("pCalc: %f, iCalc: %f, dCalc: %f, Result: %"PRI64d" (%f)\n", pCalc, iCalc, dCalc, result, dResult);
-//		if(fTestNet) printf("Actual Time: %"PRI64d", error: %"PRI64d"\n", nActualTimespan, error); 
-		if(fTestNet) printf("Actual Blocks: %d, error: %"PRI64d", Actual Time: %"PRI64d"\n", blocks, error, nActualTimespan); 
+		if(fTestNet) printf("Actual Time: %"PRI64d", error: %"PRI64d"\n", nActualTimespan, error); 
 		if(fTestNet) printf("Result: %08x %s\n",bResult.GetCompact(), bResult.getuint256().ToString().c_str()); 
 		if(fTestNet) printf("Before: %08x %s\n",bnNew.GetCompact(), bnNew.getuint256().ToString().c_str()); 
 		bnNew = bnNew - bResult; 	// Subtract the result to set the current diff
 		
 		// Make sure that diff is not set too low, ever
 		if (bnNew.GetCompact() > 0x1e0fffff) bnNew.SetCompact(0x1e0fffff);
-		if(fTestNet) printf("After:  %08x %s\n",bnNew.GetCompact(), bnNew.getuint256().ToString().c_str());
-		
-		// Reset the diff 
-		//bnNew.SetCompact(0x1e0fffff);
+		if(fTestNet) printf("After:  %08x %s\n",bnNew.GetCompact(), bnNew.getuint256().ToString().c_str()); 
 		
 	} // End Fork 3 to use a PID routine instead of the other 2 forks routine
 	 
 	return bnNew.GetCompact();
 }
+
+unsigned int static GetNextWorkRequired_DIGI(const CBlockIndex* pindexLast, const CBlockHeader *pblock)
+{
+	// Digi algorithm should never be used until at least 2 blocks are mined.
+	// Contains code by RealSolid & WDC
+	// Cleaned up for use in Guldencoin by GeertJohan (dead code removal since Guldencoin retargets every block)
+	// retarget timespan is set to a single block spacing because there is a retarget every block
+    int64 retargetTimespan = nTargetSpacing;
+
+    // get previous block
+    const CBlockIndex* pindexPrev = pindexLast->pprev;
+    assert(pindexPrev);
+
+    // calculate actual timestpan between last block and previous block
+    int64 nActualTimespan = pindexLast->GetBlockTime() - pindexPrev->GetBlockTime();
+    printf("Digishield retarget\n");
+    printf("nActualTimespan = %"PRI64d" before bounds\n", nActualTimespan);
+
+    // limit difficulty changes between 50% and 125% (human view)
+    if (nActualTimespan < (retargetTimespan - (retargetTimespan/4)) ) nActualTimespan = (retargetTimespan - (retargetTimespan/4));
+    if (nActualTimespan > (retargetTimespan + (retargetTimespan/2)) ) nActualTimespan = (retargetTimespan + (retargetTimespan/2));
+
+    // calculate new difficulty
+    CBigNum bnNew;
+    bnNew.SetCompact(pindexLast->nBits);
+    bnNew *= nActualTimespan;
+    bnNew /= retargetTimespan;
+
+    // difficulty should never go below (human view) the starting difficulty
+    if (bnNew > bnProofOfWorkLimit)
+        bnNew = bnProofOfWorkLimit;
+
+    /// debug print
+    printf("nTargetTimespan = %"PRI64d" nActualTimespan = %"PRI64d"\n" , retargetTimespan, nActualTimespan);
+    printf("Before: %08x %s\n", pindexLast->nBits, CBigNum().SetCompact(pindexLast->nBits).getuint256().ToString().c_str());
+    printf("After: %08x %s\n", bnNew.GetCompact(), bnNew.getuint256().ToString().c_str());
+
+	 // Make sure that diff is not set too low, ever ... Might find a min diff higher than 0.000228882 (or 15 on cgminer's output)
+	 if (bnNew.GetCompact() > 0x1e0fffff) bnNew.SetCompact(0x1e0fffff);
+
+	 return bnNew.GetCompact();
+}
+
+unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock)
+{
+	int DiffMode=1;
+	//double algoTest=0;
+	int64 timestamp = (pindexLast->GetBlockTime() % 60); // Get the seconds portion of the last block
+   CBigNum bnNew;
+	//algoTest = (pindexLast->nHeight % 2);
+	if(pindexLast->nHeight >= fork4Block || fTestNet)
+	{
+		printf("Timestamp seconds: %"PRI64d"\n", timestamp);
+		// Seconds timestamp of the last block between 0 and 14 OR between 30 and 44, then use Diff mode 0 (Digi), else use Diff mode 1 (PID)  
+		if((timestamp >=0 && timestamp <= 14) ||
+			(timestamp >=30 && timestamp <= 44)) 
+			{
+				DiffMode = 0;
+			}
+		//if(algoTest == 0) { DiffMode = 0; }
+	}
+	else 
+	{
+		DiffMode = 1; // Old algo 
+	}
+
+// ******************** Uncomment to reset for testnet
+//	if(fTestNet) { bnNew.SetCompact(0x1e0fffff); return bnNew.GetCompact(); }	
+// ********************
+	
+	if(DiffMode == 0) { return GetNextWorkRequired_DIGI(pindexLast, pblock); } // DigiShield algo
+	if(DiffMode == 1) { return GetNextWorkRequired_PID(pindexLast, pblock); } 	// PID Algo 
+
+	// It should never get to this next line, but force PID algo, just in case it does.
+	return GetNextWorkRequired_PID(pindexLast, pblock);
+}
+
 
 bool CheckProofOfWork(uint256 hash, unsigned int nBits)
 {
@@ -2432,19 +2408,11 @@ bool CBlock::AcceptBlock(CValidationState &state, CDiskBlockPos *dbp)
         // Check proof of work
         if (nBits != GetNextWorkRequired(pindexPrev, this))
             return state.DoS(100, error("AcceptBlock(height=%d) : incorrect proof of work", nHeight));
-
-//	if (nHeight > fork4Block){
-//            if (GetBlockTime() <= (pindexPrev->GetBlockTime() + nMinSpacing))
-//                return state.Invalid(error("AcceptBlock(height=%d) : block's timestamp (%"PRI64d") is too soon after prev(%"PRI64d")", nHeight, GetBlockTime(), pindexPrev->GetBlockTime()));
-//	} else if (nHeight > fork3Block) {
-//           if (GetBlockTime() <= pindexPrev->GetBlockTime() - 30) // allow 30 sec
-//                return state.Invalid(error("AcceptBlock(height=%d) : block's timestamp (%"PRI64d") is too soon after prev->prev(%"PRI64d")", nHeight, GetBlockTime(), pindexPrev->GetBlockTime()));
-//	} else {
-//            // Check timestamp against prev
-//            if (GetBlockTime() <= pindexPrev->GetMedianTimePast())
-//               return state.Invalid(error("AcceptBlock() : block's timestamp is too early"));
-//	}
-
+	
+        // Check timestamp against prev
+        if (GetBlockTime() <= pindexPrev->GetMedianTimePast())
+           return state.Invalid(error("AcceptBlock() : block's timestamp is too early"));
+	
         // Check that all transactions are finalized
         BOOST_FOREACH(const CTransaction& tx, vtx)
             if (!tx.IsFinal(nHeight, GetBlockTime()))
@@ -2515,8 +2483,6 @@ bool CBlock::AcceptBlock(CValidationState &state, CDiskBlockPos *dbp)
 
 bool CBlockIndex::IsSuperMajority(int minVersion, const CBlockIndex* pstart, unsigned int nRequired, unsigned int nToCheck)
 {
-    // Catcoin: temporarily disable v2 block lockin until we are ready for v2 transition
-    return false;
     unsigned int nFound = 0;
     for (unsigned int i = 0; i < nToCheck && nFound < nRequired && pstart != NULL; i++)
     {
@@ -2552,16 +2518,13 @@ bool ProcessBlock(CValidationState &state, CNode* pfrom, CBlock* pblock, CDiskBl
         CBigNum bnNewBlock;
         bnNewBlock.SetCompact(pblock->nBits);
         CBigNum bnRequired;
-        bnRequired.SetCompact(ComputeMinWork(pcheckpoint->nBits, deltaTime));
+        bnRequired.SetCompact(ComputeMinWork(pcheckpoint->nBits, deltaTime, pcheckpoint->nHeight));
 
         if (bnNewBlock > bnRequired)
         {
             printf("WARN: low proof of work: bnNewBlock: %08x bnRequired: %08x\n",
 				pblock->nBits, bnRequired.GetCompact());
-            //return state.DoS(100, error("ProcessBlock() : block with too little proof-of-work"));
-            // Don't throw them under the bus yet, at least until we get more nodes upgraded
-            // from Forktackular February -- Troy
-            return state.DoS(25, error("ProcessBlock() : block with too little proof-of-work"));
+            return state.DoS(100, error("ProcessBlock() : block with too little proof-of-work"));
         }
     }
 
