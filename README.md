@@ -1,2 +1,2 @@
-# CatcoinTestnetDigi
-Experimental Catcoin codebase with DigiShield difficulty adjustment
+# CatcoinTestnetDigi/PID
+Experimental Catcoin codebase with DigiShield and PID difficulty adjustments
